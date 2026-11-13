@@ -1,0 +1,40 @@
+gui:
+  border: rounded
+  sidePanelWidth: 0.23
+  sidePanels:
+    - [files]
+    - [branches, commits, stash]
+  colorScheme: dark
+  showPanelJumps: false
+  showListFooter: false
+  showBottomLine: false
+  showRootItemInFileTree: false
+  expandFocusedSidePanel: true
+  expandedSidePanelWeight: 4
+  showFileTree: true
+  showNumstatInFilesView: true
+  showIcons: true
+  nerdFontsVersion: "3"
+  showRandomTip: false
+  showCommandLog: false
+  animateExplosion: false
+  theme:
+    activeBorderColor: ['#767c9d']
+    inactiveBorderColor: ['#303340']
+    searchingActiveBorderColor: ['#5de4c7', bold]
+    optionsTextColor: ['#89ddff']
+    selectedLineBgColor: ['#252b34']
+    selectedLineFgColor: ['#e4f0fb']
+    unstagedChangesColor: ['#d0679d']
+    defaultFgColor: ['#a6accd']
+git:
+  autoFetch: false
+  diffRenderers:
+    - name: Review
+      command: delta --dark --paging=never --width={{width}} {{if gt .width 120}}--side-by-side{{end}}
+    - name: Unified
+      command: delta --dark --paging=never --width={{width}}
+    - name: Side by side
+      command: delta --dark --paging=never --side-by-side --width={{width}}
+    - name: Raw Git
+      type: rawGit

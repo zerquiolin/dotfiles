@@ -1,0 +1,11 @@
+{
+  "name": "dotfiles-tooling",
+  "private": true,
+  "dependencies": {
+    "@vtsls/language-server": "0.3.0",
+    "typescript": "7.0.2",
+    "vscode-langservers-extracted": "4.10.0",
+    "prettier": "3.9.10",
+    "@biomejs/biome": "2.5.15"
+  }
+}

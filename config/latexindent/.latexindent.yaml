@@ -1,0 +1,149 @@
+# Shared conservative LaTeX formatting rules. Requires latexindent -m.
+defaultIndent: "    "
+indentPreamble: 1
+noAdditionalIndent:
+  document: 0
+indentAfterHeadings:
+  section:
+    lookForThis: 1
+    blocksEndBefore: '\\end\{document\}'
+    level: 1
+  section*:
+    lookForThis: 1
+    blocksEndBefore: '\\end\{document\}'
+    level: 1
+  subsection:
+    lookForThis: 1
+    blocksEndBefore: '\\end\{document\}'
+    level: 2
+  subsection*:
+    lookForThis: 1
+    blocksEndBefore: '\\end\{document\}'
+    level: 2
+  subsubsection:
+    lookForThis: 1
+    blocksEndBefore: '\\end\{document\}'
+    level: 3
+  subsubsection*:
+    lookForThis: 1
+    blocksEndBefore: '\\end\{document\}'
+    level: 3
+indentAfterItems:
+  itemize: 1
+  itemize*: 1
+  enumerate: 1
+  enumerate*: 1
+  description: 1
+  list: 1
+itemNames:
+  item: 1
+  bibitem: 1
+  task: 1
+indentRules:
+  item: "    "
+  bibitem: "    "
+  task: "    "
+  section: "    "
+  section*: "    "
+  subsection: "    "
+  subsection*: "    "
+  subsubsection: "    "
+  subsubsection*: "    "
+  paragraph: "    "
+  paragraph*: "    "
+  subparagraph: "    "
+  subparagraph*: "    "
+  document: "    "
+  abstract: "    "
+  quote: "    "
+  quotation: "    "
+  verse: "    "
+  itemize: "    "
+  enumerate: "    "
+  description: "    "
+  center: "    "
+  flushleft: "    "
+  flushright: "    "
+  figure: "    "
+  table: "    "
+  tabular: "    "
+  tabularx: "    "
+  longtable: "    "
+  align: "    "
+  align*: "    "
+  aligned: "    "
+  equation: "    "
+  equation*: "    "
+  gather: "    "
+  gather*: "    "
+  multline: "    "
+  multline*: "    "
+  cases: "    "
+  matrix: "    "
+  pmatrix: "    "
+  bmatrix: "    "
+  vmatrix: "    "
+  Vmatrix: "    "
+  split: "    "
+  theorem: "    "
+  lemma: "    "
+  proposition: "    "
+  corollary: "    "
+  definition: "    "
+  proof: "    "
+verbatimEnvironments:
+  verbatim: 1
+  Verbatim: 1
+  lstlisting: 1
+  minted: 1
+verbatimCommands:
+  url: 1
+  path: 1
+  verb: 1
+  lstinline: 1
+  MintedInline: 1
+  mintinline: 1
+lookForAlignDelims:
+  align:
+    delimiterRegEx: '((?<!\\)&)'
+    spacesBeforeAmpersand: 1
+    spacesAfterAmpersand: 1
+    justification: left
+    alignDoubleBackSlash: 1
+    multiColumnGrouping: 0
+modifyLineBreaks:
+  preserveBlankLines: 1
+  environments:
+    BeginStartsOnOwnLine: 1
+    EndStartsOnOwnLine: 1
+    EndFinishesWithLineBreak: 1
+  commands:
+    section:
+      CommandStartsOnOwnLine: 1
+    section*:
+      CommandStartsOnOwnLine: 1
+    subsection:
+      CommandStartsOnOwnLine: 1
+    subsection*:
+      CommandStartsOnOwnLine: 1
+    subsubsection:
+      CommandStartsOnOwnLine: 1
+    subsubsection*:
+      CommandStartsOnOwnLine: 1
+    paragraph:
+      CommandStartsOnOwnLine: 1
+    paragraph*:
+      CommandStartsOnOwnLine: 1
+    subparagraph:
+      CommandStartsOnOwnLine: 1
+    subparagraph*:
+      CommandStartsOnOwnLine: 1
+  textWrapOptions:
+    columns: 100
+    huge: overflow
+    separator: "\n"
+    when: after
+removeTrailingWhitespace:
+  beforeProcessing: 1
+  afterProcessing: 1
+# Final newline is enforced by bin/latex-format (not a latexindent YAML option).

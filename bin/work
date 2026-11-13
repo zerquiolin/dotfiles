@@ -1,0 +1,363 @@
+#!/usr/bin/env python3
+"""Personal workspace registry and session launcher. No project commands are evaluated."""
+import argparse, hashlib, json, os, pathlib, shlex, shutil, subprocess, sys
+os.environ["PATH"] = str(pathlib.Path(__file__).resolve().parent) + os.pathsep + os.environ.get("PATH", "")
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+REGISTRY = pathlib.Path(os.environ.get("WORKSPACE_REGISTRY", str(pathlib.Path.home()/".config/workspaces/projects.json")))
+def run(*args, **kw):
+    return subprocess.run(args, check=True, **kw)
+def load():
+    if not REGISTRY.exists(): return []
+    data = json.loads(REGISTRY.read_text())
+    if not isinstance(data, list): raise ValueError("Registry must be a JSON list")
+    for x in data:
+        if not isinstance(x,dict): raise ValueError("Each project must be an object")
+        if not all(isinstance(x.get(k),str) and x[k] for k in ("name","path","group")): raise ValueError("Each project needs name, path and group")
+    return data
+def choose(rows, prompt):
+    if not rows: raise ValueError("No projects. Run: work add NAME PATH --group CATEGORY")
+    result = subprocess.run(["fzf", "--height=100%", "--no-scrollbar", "--gutter= ", "--pointer=›", "--marker=✓", "--layout=reverse", "--border=rounded", "--prompt="+prompt, "--color=bg:-1,gutter:-1,preview-bg:-1,border:#767c9d,fg:#a6accd,hl:#5de4c7,fg+:#e4f0fb,bg+:#303340,pointer:#89ddff,marker:#5de4c7,hl+:#5de4c7,header:#767c9d,info:#767c9d,prompt:#89ddff", "--bind=h:up,k:up,j:down,l:down,start:unbind(h)+unbind(j)+unbind(k)+unbind(l),tab:toggle-search+toggle-bind(h)+toggle-bind(j)+toggle-bind(k)+toggle-bind(l)", "--header=Tab: type / navigate\nh/k up · j/l down · Enter open"],input="\n".join(rows),text=True,capture_output=True)
+    return result.stdout.strip() if result.returncode==0 else None
+def session(x): return "work-"+hashlib.sha256(x["path"].encode()).hexdigest()[:12]
+def workspace_state(name):
+    path=ROOT/".state/workspaces"/name
+    path.mkdir(parents=True,exist_ok=True)
+    return path
+def tmux_output(*args):
+    return run("tmux",*args,capture_output=True,text=True).stdout.rstrip("\n")
+def leave_project():
+    if not os.environ.get("TMUX"): raise ValueError("Run work leave inside an active project")
+    name=tmux_output("display-message","-p","#{session_name}")
+    if not name.startswith("work-"): raise ValueError("Current session is not a project workspace")
+    checkpoint(name)
+    run("tmux","detach-client")
+def capture_layout(name):
+    snapshots={}
+    for file in workspace_state(name).glob("editor-*.json"):
+        try:
+            data=json.loads(file.read_text())
+            if data.get("pane") and data.get("snapshot"): snapshots[data["pane"]]=data["snapshot"]
+        except (ValueError,OSError): pass
+    windows=[]
+    for row in tmux_output("list-windows","-t",name,"-F","#{window_index}\t#{window_name}\t#{window_layout}\t#{window_active}\t#{window_zoomed_flag}").splitlines():
+        index,title,layout,active,zoomed=row.split("\t",4)
+        panes=[]
+        for row in tmux_output("list-panes","-t",name+":"+index,"-F","#{pane_id}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_active}\t#{pane_start_command}").splitlines():
+            pane_id,cwd,command,focused,start=row.split("\t",4)
+            if "work" in start and "sidebar" in start: continue
+            panes.append(dict(cwd=cwd,editor=command in ("nvim","neovim"),snapshot=snapshots.get(pane_id),active=focused=="1"))
+        if panes: windows.append(dict(title=title,layout=layout,panes=panes,active=active=="1",zoomed=zoomed=="1"))
+    return windows
+def checkpoint(name):
+    if not name.startswith("work-"): raise ValueError("Not a project workspace")
+    windows=capture_layout(name)
+    state=workspace_state(name); temp=state/("layout-"+str(os.getpid())+".tmp")
+    temp.write_text(json.dumps(windows,indent=2)+"\n"); temp.replace(state/"layout.json")
+def stop_project(x):
+    import time
+    name=session(x)
+    if subprocess.run(["tmux","has-session","-t",name],capture_output=True).returncode:
+        print("Project is already stopped"); return
+    if input("Stop "+x["name"]+"? Its terminal processes will end. [y/N]: ").strip().lower()!="y": return
+    state=workspace_state(name)
+    editors=[]
+    for file in state.glob("editor-*.json"):
+        data=json.loads(file.read_text())
+        result=subprocess.run(["nvim","--server",data["socket"],"--remote-expr","json_encode({'modified': len(filter(getbufinfo(), 'v:val.changed')), 'pid': getpid()})"],capture_output=True,text=True)
+        if result.returncode: continue
+        info=json.loads(result.stdout)
+        if info["modified"]: raise ValueError("Project has unsaved editor changes. Save or discard them in Neovim, then stop again. Nothing was stopped.")
+        editors.append(data)
+    pane_commands=tmux_output("list-panes","-s","-t",name,"-F","#{pane_current_command}").splitlines()
+    if sum(c in ("nvim","neovim") for c in pane_commands)>len(editors):
+        raise ValueError("An editor predates workspace protection. Close it normally before stopping; nothing was stopped.")
+    windows=capture_layout(name)
+    for editor in editors:
+        result=tmux_rpc(editor["socket"], "luaeval(\"require('user.workspace').prepare_stop()\")")
+        if result!="true" and result!="1": raise ValueError("Editor could not save its session; project remains running")
+    (state/"layout.json").write_text(json.dumps(windows,indent=2)+"\n")
+    for editor in editors:
+        run("nvim","--server",editor["socket"],"--remote-send","<C-\\><C-N>:qa<CR>",capture_output=True)
+    for _ in range(40):
+        if not any(subprocess.run(["nvim","--server",e["socket"],"--remote-expr","1"],capture_output=True).returncode==0 for e in editors): break
+        time.sleep(.1)
+    else: raise ValueError("An editor is still open; project was not stopped")
+    run("tmux","kill-session","-t",name)
+    print("Stopped",x["name"],"— layout saved")
+def tmux_rpc(socket, expression):
+    return run("nvim","--server",socket,"--remote-expr",expression,capture_output=True,text=True).stdout.strip()
+def open_project(x, layout):
+    path=pathlib.Path(x["path"]).expanduser().resolve()
+    if not path.is_dir(): raise ValueError("Project folder is missing: "+str(path))
+    name=session(x); state=workspace_state(name)
+    if subprocess.run(["tmux","has-session","-t",name],capture_output=True).returncode:
+        saved=json.loads((state/"layout.json").read_text()) if (state/"layout.json").exists() else []
+        if not saved: saved=[dict(title=x["name"],panes=[dict(cwd=str(path),editor=layout=="code")])]
+        for i,window in enumerate(saved):
+            panes=window["panes"]
+            cwd=panes[0]["cwd"] if pathlib.Path(panes[0]["cwd"]).is_dir() else str(path)
+            if i==0:
+                run("tmux","-f",str(ROOT/"config/tmux/tmux.conf"),"new-session","-d","-s",name,"-c",cwd,"-n",window["title"])
+                run("tmux","set-environment","-t",name,"WORK_SESSION",name)
+            else: run("tmux","new-window","-t",name,"-n",window["title"],"-c",cwd)
+            target=tmux_output("list-windows","-t",name,"-F","#{window_id}").splitlines()[-1]
+            for j,pane in enumerate(panes):
+                cwd=pane["cwd"] if pathlib.Path(pane["cwd"]).is_dir() else str(path)
+                if j: run("tmux","split-window","-t",target,"-c",cwd)
+                pane_id=tmux_output("display-message","-p","-t",target,"#{pane_id}")
+                if pane["editor"] and layout=="code":
+                    command=shlex.join(["env","WORK_SESSION="+name,"WORK_RESTORE=1","WORK_EDITOR_SNAPSHOT="+(pane.get("snapshot") or str(state/("view-"+str(i)+"-"+str(j)+".vim"))),"nvim"])
+                    run("tmux","send-keys","-t",pane_id,command,"Enter")
+            pane_ids=tmux_output("list-panes","-t",target,"-F","#{pane_id}").splitlines()
+            focused=next((n for n,p in enumerate(panes) if p.get("active")),0)
+            if window.get("layout"):
+                subprocess.run(["tmux","select-layout","-t",target,window["layout"]],capture_output=True)
+            run("tmux","select-pane","-t",pane_ids[min(focused,len(pane_ids)-1)])
+            if window.get("zoomed"): run("tmux","resize-pane","-Z","-t",target)
+        active_index=next((i for i,w in enumerate(saved) if w.get("active")),0)
+        run("tmux","select-window","-t",name+":"+str(active_index))
+    # Existing legacy sidebar panes are hidden by zooming the focused work pane.
+    panes=tmux_output("list-panes","-t",name,"-F","#{pane_id}\t#{pane_start_command}").splitlines()
+    sidebar=any("work" in row and "sidebar" in row for row in panes)
+    if sidebar:
+        candidates=[row.split("\t",1)[0] for row in panes if "sidebar" not in row]
+        if candidates:
+            run("tmux","select-pane","-t",candidates[0])
+            if tmux_output("display-message","-p","-t",candidates[0],"#{window_zoomed_flag}")!="1": run("tmux","resize-pane","-Z","-t",candidates[0])
+    run("tmux","switch-client" if os.environ.get("TMUX") else "attach-session","-t",name)
+def workspace_has_content(x):
+    name=session(x)
+    state=workspace_state(name)
+    live=subprocess.run(["tmux","has-session","-t",name],capture_output=True).returncode==0
+    if live:
+        panes=tmux_output("list-panes","-s","-t",name,"-F","#{pane_current_command}\t#{pane_start_command}").splitlines()
+        panes=[row for row in panes if not ("work" in row and "sidebar" in row)]
+        if len(panes)>1: return True
+        commands=[row.split("\t",1)[0] for row in panes]
+        if any(command not in ("zsh","bash","fish","sh","nvim","neovim") for command in commands): return True
+        for file in state.glob("editor-*.json"):
+            try:
+                data=json.loads(file.read_text())
+                expression="luaeval(\"#vim.tbl_filter(function(b) return b.name ~= '' and vim.bo[b.bufnr].buftype == '' end, vim.fn.getbufinfo())\")"
+                if int(tmux_rpc(data["socket"],expression))>0: return True
+            except (ValueError,OSError,subprocess.CalledProcessError): pass
+        return False
+    layout=state/"layout.json"
+    if not layout.exists(): return False
+    windows=json.loads(layout.read_text())
+    if sum(len(w.get("panes",[])) for w in windows)>1: return True
+    for window in windows:
+        for pane in window.get("panes",[]):
+            snapshot=pane.get("snapshot")
+            if snapshot and pathlib.Path(snapshot).is_file():
+                if any(line.startswith("badd ") for line in pathlib.Path(snapshot).read_text().splitlines()): return True
+    return False
+
+def save_projects(items):
+    REGISTRY.parent.mkdir(parents=True,exist_ok=True)
+    temp=REGISTRY.with_suffix(".tmp")
+    temp.write_text(json.dumps(items,indent=2)+"\n"); temp.replace(REGISTRY)
+def project_ui(select_path=False):
+    mode=os.environ.get("SUITE_MODE","Type")
+    collapsed=set()
+    while True:
+        items=load()
+        ordered=sorted(items,key=lambda x:(x["group"].casefold(),not x.get("favorite",False),x["name"].casefold()))
+        rows=[]
+        row_targets=[]
+        groups={}
+        for project in ordered: groups.setdefault(project["group"],[]).append(project)
+        for group,projects in groups.items():
+            row_targets.append(("group",group))
+            rows.append(f"{len(rows)+1}. {'›' if group in collapsed else '⌄'} {group} ({len(projects)})")
+            if group not in collapsed:
+                for project in projects:
+                    row_targets.append(("project",project))
+                    rows.append(f"{len(rows)+1}.     {'★ ' if project.get('favorite') else ''}{project['name']}")
+        if not rows: rows=["No projects yet — Ctrl-N to create or register"]
+        bindings=["h:print(back)+print(Navigate)+accept,j:down,k:up,l:accept", "start:disable-search" if mode=="Navigate" else "start:unbind(h)+unbind(j)+unbind(k)+unbind(l)"]
+        bindings.append('tab:transform:case "$FZF_PROMPT" in *Navigate*) printf "toggle-search+toggle-bind(h)+toggle-bind(j)+toggle-bind(k)+toggle-bind(l)+change-prompt(Type ❯ )" ;; *) printf "toggle-search+toggle-bind(h)+toggle-bind(j)+toggle-bind(k)+toggle-bind(l)+change-prompt(Navigate ❯ )" ;; esac')
+        for key,action in [("enter","open"),("l","open"),("ctrl-n","new"),("ctrl-d","delete"),("ctrl-f","favorite"),("ctrl-u","update"),("ctrl-s","stop"),("ctrl-w","workspace")]:
+            bindings.append(key+':transform:case "$FZF_PROMPT" in *Navigate*) printf "print('+action+')+print(Navigate)+accept" ;; *) printf "print('+action+')+print(Type)+accept" ;; esac')
+        argv=["fzf","--no-sort","--height=65%","--layout=reverse","--border=rounded","--border-label= Projects ","--prompt="+mode+" ❯ ","--no-scrollbar","--gutter= ","--pointer=›","--color=bg:-1,gutter:-1,bg+:#303340,fg:#a6accd,fg+:#e4f0fb,pointer:#89ddff,header:#767c9d,footer:#767c9d,border:#767c9d", "--footer-border=none", "--footer=Enter/l open or fold group · h back/fold · Tab type/navigate\nCtrl-N new · Ctrl-D remove · Ctrl-F favorite · Ctrl-U update · Ctrl-S stop · Ctrl-W workspace"]
+        for binding in bindings: argv.extend(["--bind",binding])
+        result=subprocess.run(argv,input="\n".join(rows),text=True,capture_output=True)
+        if result.returncode: return
+        output=result.stdout.splitlines()
+        if len(output)<2: return
+        action,mode=output[:2]
+        x=None
+        target=None
+        if row_targets and len(output)>2: target=row_targets[int(output[2].split(".",1)[0])-1]
+        if action=="back":
+            if target:
+                group=target[1] if target[0]=="group" else target[1]["group"]
+                if group not in collapsed:
+                    collapsed.add(group); continue
+            return
+        if target and target[0]=="group" and action in ("open","workspace"):
+            group=target[1]
+            if group in collapsed: collapsed.remove(group)
+            else: collapsed.add(group)
+            continue
+        if target and target[0]=="project": x=target[1]
+        try:
+            if action=="new":
+                name=input("Project name (blank cancels): ").strip()
+                if not name: continue
+                raw=input("Folder [.]; created if missing: ").strip() or "."
+                path=pathlib.Path(raw).expanduser().resolve()
+                group=input("Category [Projects]: ").strip() or "Projects"
+                if not name or name.startswith("-") or any(c in name+group for c in "\n\r\t"): raise ValueError("Invalid name/category")
+                if any(y["name"]==name for y in items): raise ValueError("Project name already exists")
+                path.mkdir(parents=True,exist_ok=True)
+                items.append(dict(name=name,path=str(path),group=group)); save_projects(items)
+            elif x and action=="favorite":
+                x["favorite"]=not x.get("favorite",False); save_projects(items)
+            elif x and action=="delete":
+                if input("Remove registration for "+x["name"]+"? Files stay intact. [y/N]: ").lower()=="y":
+                    save_projects([y for y in items if y is not x])
+            elif x and action=="update":
+                name=input("Name ["+x["name"]+"]: ").strip() or x["name"]
+                path=str(pathlib.Path(input("Folder ["+x["path"]+"]: ").strip() or x["path"]).expanduser().resolve())
+                group=input("Category ["+x["group"]+"]: ").strip() or x["group"]
+                if name.startswith("-") or any(c in name+group for c in "\n\r\t"): raise ValueError("Invalid name/category")
+                if any(y is not x and y["name"]==name for y in items): raise ValueError("Project name already exists")
+                if not pathlib.Path(path).is_dir(): raise ValueError("Folder does not exist")
+                x.update(name=name,path=path,group=group); save_projects(items)
+            elif x and action=="stop": stop_project(x)
+            elif x and action=="workspace":
+                if select_path and not workspace_has_content(x):
+                    path=pathlib.Path(x["path"]).expanduser().resolve()
+                    if not path.is_dir(): raise ValueError("Project folder is missing: "+str(path))
+                    return str(path)
+                open_project(x,"shell"); return
+            elif x and action=="open":
+                if select_path:
+                    path=pathlib.Path(x["path"]).expanduser().resolve()
+                    if not path.is_dir(): raise ValueError("Project folder is missing: "+str(path))
+                    return str(path)
+                open_project(x,"shell"); return
+        except (ValueError,OSError) as error:
+            print(error,file=sys.stderr); input("Enter to return to projects")
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    sub=parser.add_subparsers(dest="action")
+    a=sub.add_parser("add"); a.add_argument("name"); a.add_argument("path",nargs="?",default="."); a.add_argument("--group",default="Projects")
+    sub.add_parser("list")
+    a=sub.add_parser("projects"); a.add_argument("--select-path",action="store_true")
+    sub.add_parser("leave")
+    a=sub.add_parser("checkpoint"); a.add_argument("--session")
+    a=sub.add_parser("stop"); a.add_argument("name",nargs="?")
+    a=sub.add_parser("manage"); a.add_argument("operation",choices=["add-current","add-folder","create","favorite","unfavorite","remove","configure","context"])
+    a=sub.add_parser("favorite"); a.add_argument("name"); a.add_argument("--off",action="store_true")
+    a=sub.add_parser("remove"); a.add_argument("name")
+    a=sub.add_parser("path"); a.add_argument("name")
+    a=sub.add_parser("open"); a.add_argument("name",nargs="?"); a.add_argument("--layout",choices=["shell","code"],default="shell")
+    sub.add_parser("sidebar")
+    sub.add_parser("context-init")
+    args=parser.parse_args(); items=load()
+    if args.action=="checkpoint":
+        name=args.session or tmux_output("display-message","-p","-t",os.environ.get("TMUX_PANE", ""),"#{session_name}")
+        checkpoint(name); return
+    if args.action=="leave": leave_project(); return
+    if args.action=="stop":
+        if args.name: x=next((x for x in items if x["name"]==args.name),None)
+        elif os.environ.get("TMUX"):
+            current=tmux_output("display-message","-p","#{session_name}")
+            x=next((x for x in items if session(x)==current),None)
+        else: x=None
+        if not x: raise ValueError("Specify a registered project: work stop NAME")
+        stop_project(x); return
+    if args.action=="projects":
+        if args.select_path:
+            import contextlib
+            with contextlib.redirect_stdout(sys.stderr): selected=project_ui(select_path=True)
+            if selected: print(selected)
+        else: project_ui()
+        return
+    if args.action=="manage":
+        op=args.operation
+        if op in ("add-current","add-folder","create"):
+            name=input("Project name (blank cancels): ").strip()
+            if not name: return
+            if op=="add-current": path=pathlib.Path.cwd()
+            else:
+                value=input("Folder path (blank cancels): ").strip()
+                if not value: return
+                path=pathlib.Path(value).expanduser().resolve()
+            group=input("Category [Projects]: ").strip() or "Projects"
+            if any(x["name"]==name for x in items): raise ValueError("Name already exists")
+            if any(c in name+group for c in "\n\r\t") or name.startswith("-"): raise ValueError("Invalid project name/category")
+            if op=="create": path.mkdir(parents=True,exist_ok=False)
+            run(str(ROOT/"bin/work"),"add",name,str(path),"--group",group)
+            print("Registered",name)
+            return
+        if op=="configure":
+            if not REGISTRY.exists(): raise ValueError("Add a project first")
+            run("nvim",str(REGISTRY)); load(); return
+        ordered=sorted(items,key=lambda x:(x["group"],x["name"]))
+        selected=choose([f"{i+1}. {x['group']} / {x['name']}" for i,x in enumerate(ordered)],"Project ❯ ")
+        if not selected: return
+        x=ordered[int(selected.split(".",1)[0])-1]
+        if op=="context":
+            run(str(ROOT/"bin/work"),"context-init",cwd=x["path"])
+        elif op=="remove":
+            if input("Remove registration for " + x["name"] + "? Files are kept. [y/N]: ").strip().lower()=="y":
+                run(str(ROOT/"bin/work"),"remove",x["name"])
+        else:
+            command=[str(ROOT/"bin/work"),"favorite",x["name"]]
+            if op=="unfavorite": command.append("--off")
+            run(*command)
+        return
+    if args.action=="favorite":
+        x=next((x for x in items if x["name"]==args.name),None)
+        if not x: raise ValueError("Unknown project")
+        x["favorite"]=not args.off
+        temp=REGISTRY.with_suffix(".tmp"); temp.write_text(json.dumps(items,indent=2)+"\n"); temp.replace(REGISTRY); return
+    if args.action=="remove":
+        remaining=[x for x in items if x["name"]!=args.name]
+        if len(remaining)==len(items): raise ValueError("Unknown project")
+        temp=REGISTRY.with_suffix(".tmp"); temp.write_text(json.dumps(remaining,indent=2)+"\n"); temp.replace(REGISTRY); return
+    if args.action=="add":
+        path=str(pathlib.Path(args.path).expanduser().resolve())
+        if not pathlib.Path(path).is_dir(): raise ValueError("Folder does not exist")
+        if any(x["name"]==args.name for x in items): raise ValueError("Name already exists; edit "+str(REGISTRY))
+        if any(c in args.name+args.group for c in "\n\r\t") or args.name.startswith("-"): raise ValueError("Use a single-line name without a leading dash")
+        items.append(dict(name=args.name,path=path,group=args.group)); REGISTRY.parent.mkdir(parents=True,exist_ok=True)
+        temp=REGISTRY.with_suffix(".tmp"); temp.write_text(json.dumps(items,indent=2)+"\n"); temp.replace(REGISTRY); return
+    if args.action=="context-init":
+        for name in ("AGENTS.md","PROJECT_CONTEXT.md"):
+            target=pathlib.Path.cwd()/name
+            if target.exists(): print("Preserved",name); continue
+            with target.open("x") as f: f.write((ROOT/"templates"/name).read_text())
+        return
+    if args.action=="list":
+        for x in items: print(x["group"]+" / "+x["name"]+"  "+x["path"])
+        return
+    if args.action=="path":
+        x=next((x for x in items if x["name"]==args.name),None)
+        if not x: raise ValueError("Unknown project")
+        print(x["path"]); return
+    for tool in ("tmux","fzf"):
+        if not shutil.which(tool): raise ValueError("Install missing dependency: "+tool)
+    while True:
+        if getattr(args,"name",None): x=next((x for x in items if x["name"]==args.name),None)
+        else:
+            ordered=sorted(items,key=lambda x:(not x.get("favorite",False),x["group"],x["name"]))
+            active = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"], capture_output=True, text=True).stdout.splitlines()
+            rows=[]
+            for i,x in enumerate(ordered):
+                branch=subprocess.run(["git", "-C", x["path"], "branch", "--show-current"],capture_output=True,text=True).stdout.strip()
+                rows.append(f"{i+1}. {"★ " if x.get("favorite") else ""}{x['group']} / {x['name']}  {'● active' if session(x) in active else '○ saved'}" + ("  ⎇ " + branch if branch else ""))
+            selected=choose(rows,"Projects ❯ ")
+            if not selected: return
+            x=ordered[int(selected.split(".",1)[0])-1]
+        if not x: raise ValueError("Unknown project")
+        open_project(x,getattr(args,"layout","shell"))
+        if args.action!="sidebar": return
+if __name__=="__main__":
+    try: main()
+    except (EOFError,ValueError,OSError,subprocess.CalledProcessError,json.JSONDecodeError) as e:
+        print("work:",e,file=sys.stderr); sys.exit(1)

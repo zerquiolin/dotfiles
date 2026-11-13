@@ -1,0 +1,8 @@
+{
+  "poimandres": {"label":"Poimandres", "scheme":"poimandres", "fg":"#a6accd", "text":"#e4f0fb", "muted":"#767c9d", "surface":"#252b34", "accent":"#89ddff", "green":"#5de4c7"},
+  "tokyo-night-moon": {"label":"Tokyo Night Moon", "scheme":"tokyonight-moon", "fg":"#c8d3f5", "text":"#c8d3f5", "muted":"#636da6", "surface":"#2f334d", "accent":"#82aaff", "green":"#c3e88d"},
+  "catppuccin-mocha": {"label":"Catppuccin Mocha", "scheme":"catppuccin-mocha", "fg":"#cdd6f4", "text":"#cdd6f4", "muted":"#7f849c", "surface":"#313244", "accent":"#cba6f7", "green":"#a6e3a1"},
+  "rose-pine-moon": {"label":"Rosé Pine Moon", "scheme":"rose-pine-moon", "fg":"#e0def4", "text":"#e0def4", "muted":"#6e6a86", "surface":"#393552", "accent":"#c4a7e7", "green":"#9ccfd8"},
+  "kanagawa-wave": {"label":"Kanagawa Wave", "scheme":"kanagawa-wave", "fg":"#dcd7ba", "text":"#dcd7ba", "muted":"#727169", "surface":"#2a2a37", "accent":"#7e9cd8", "green":"#98bb6c"},
+  "kanagawa-dragon": {"label":"Kanagawa Dragon", "scheme":"kanagawa-dragon", "fg":"#c5c9c5", "text":"#c5c9c5", "muted":"#737c73", "surface":"#282727", "accent":"#8ba4b0", "green":"#87a987"}
+}

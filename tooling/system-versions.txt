@@ -1,0 +1,16 @@
+fd 10.5.0
+fzf 0.74.5
+lazygit 0.66.2
+lua-language-server 3.19.2
+neovim 0.12.6
+node 26.3.0
+ripgrep 15.2.0
+starship 1.27.0
+stylua 2.6.0
+tex-fmt 0.5.7
+texlab 5.26.0
+tree-sitter-cli 0.27.1
+uv 0.13.1
+zoxide 0.10.0
+Python tooling runtime: 3.14.6
+Copilot native server: 1.554.0 (plugin-pinned)

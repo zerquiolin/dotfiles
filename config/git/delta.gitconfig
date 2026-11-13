@@ -1,0 +1,27 @@
+[core]
+    pager = delta
+[interactive]
+    diffFilter = delta --color-only
+[delta]
+    dark = true
+    syntax-theme = Nord
+    navigate = true
+    line-numbers = true
+    keep-plus-minus-markers = true
+    minus-style = syntax "#2b1c24"
+    minus-emph-style = syntax bold "#64303e"
+    plus-style = syntax "#172d25"
+    plus-emph-style = syntax bold "#285a3b"
+    zero-style = syntax
+    file-style = "#89ddff" bold
+    file-decoration-style = none
+    hunk-header-style = file line-number syntax
+    hunk-header-decoration-style = none
+    line-numbers-minus-style = "#d0679d"
+    line-numbers-plus-style = "#5de4c7"
+    line-numbers-zero-style = "#767c9d"
+    line-numbers-left-format = "{nm:>4} "
+    line-numbers-right-format = "{np:>4} │ "
+    hunk-header-file-style = "#767c9d"
+    hunk-header-line-number-style = "#767c9d"
+    hunk-header-style = line-number

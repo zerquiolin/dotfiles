@@ -1,0 +1,2 @@
+# Used only when no existing TeX distribution is detected.
+cask "mactex-no-gui"

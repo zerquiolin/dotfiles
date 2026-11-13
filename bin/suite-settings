@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Persistent appearance controls; default settings leave the existing appearance intact."""
+import argparse,json,pathlib,subprocess,os,tempfile
+ROOT=pathlib.Path(__file__).resolve().parents[1]
+STATE=ROOT/'.state/appearance'
+PRESETS=json.loads((ROOT/'config/appearance/presets.json').read_text())
+DEFAULTS=dict(theme='poimandres',font='Maple Mono NF',italic_font='VictorMono Nerd Font Mono',size=14,thicken=True,background='000000',opacity=.97,blur=30,image=str(ROOT/'config/ghostty/backgrounds/poimandres-galaxy.png'),image_opacity=.35)
+def read():
+    return DEFAULTS | (json.loads((STATE/'settings.json').read_text()) if (STATE/'settings.json').exists() else {})
+def write(settings):
+    if settings['theme'] not in PRESETS: raise ValueError('Unknown theme')
+    if not 6<=float(settings['size'])<=40: raise ValueError('Font size must be 6–40')
+    for key in ('opacity','image_opacity'):
+        if not 0<=float(settings[key])<=1: raise ValueError(key+' must be between 0 and 1')
+    if not 0<=int(settings['blur'])<=100: raise ValueError('Blur must be 0–100')
+    for key in ('font','italic_font','image','background'):
+        if any(c in str(settings[key]) for c in '\n\r"'): raise ValueError('Invalid '+key)
+    if len(settings['background'])!=6 or any(c not in '0123456789abcdefABCDEF' for c in settings['background']): raise ValueError('Background must be a six-digit hex color')
+    if settings['image'] and not pathlib.Path(settings['image']).is_file(): raise ValueError('Wallpaper file does not exist')
+    lines=['font-family =', f'font-family = "{settings["font"]}"', 'font-family-bold =', f'font-family-bold = "{settings["font"]}"', 'font-family-italic =', f'font-family-italic = "{settings["italic_font"]}"', 'font-family-bold-italic =', f'font-family-bold-italic = "{settings["italic_font"]}"',f'font-size = {settings["size"]}',f'font-thicken = {str(settings["thicken"]).lower()}',f'background = {settings["background"]}',f'background-opacity = {settings["opacity"]}',f'background-blur = {settings["blur"]}',f'background-image = "{settings["image"]}"' if settings['image'] else 'background-image =',f'background-image-opacity = {settings["image_opacity"]}']
+    STATE.mkdir(parents=True,exist_ok=True)
+    for name,content in [('ghostty.conf','\n'.join(lines)+'\n'),('settings.json',json.dumps(settings,indent=2)+'\n')]:
+        fd,path=tempfile.mkstemp(dir=STATE)
+        with os.fdopen(fd,'w') as f:f.write(content)
+        os.replace(path,STATE/name)
+def choose(rows):
+    start='start:disable-search' if os.environ.get('SUITE_MODE')=='Navigate' else 'start:unbind(h)+unbind(j)+unbind(k)+unbind(l)'
+    bind='j:down,k:up,h:abort,l:accept,'+start+',tab:toggle-search+toggle-bind(h)+toggle-bind(j)+toggle-bind(k)+toggle-bind(l)'
+    r=subprocess.run(['fzf','--height=60%','--layout=reverse','--border=rounded','--no-scrollbar','--gutter= ','--pointer=›','--color=bg:-1,gutter:-1,bg+:#252b34,pointer:#89ddff','--header=Tab: type/navigate · Enter select · Esc cancel','--bind='+bind],input='\n'.join(rows),text=True,capture_output=True)
+    return r.stdout.strip() if r.returncode==0 else None
+def main():
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('action',choices=['theme','background','font','show','reset','init']);args=parser.parse_args();settings=read()
+    if args.action=='show': print(json.dumps(settings,indent=2));return
+    if args.action=='init':write(settings);return
+    if args.action=='theme':
+        labels={v['label']:k for k,v in PRESETS.items()};selected=choose(list(labels))
+        if not selected:return
+        settings['theme']=labels[selected]
+    elif args.action=='background':
+        selected=choose(['Galaxy wallpaper','Plain background','Custom wallpaper'])
+        if not selected:return
+        if selected=='Plain background':settings['image']=''
+        elif selected=='Galaxy wallpaper':settings['image']=DEFAULTS['image']
+        else:
+            value=input('Wallpaper path (blank cancels): ').strip()
+            if not value:return
+            settings['image']=str(pathlib.Path(value).expanduser().resolve())
+        settings['background']=input('Background hex ['+settings['background']+']: ').strip().lstrip('#') or settings['background']
+        for key,prompt in [('opacity','Background opacity 0–1'),('blur','Blur 0–100'),('image_opacity','Wallpaper opacity 0–1')]:
+            value=input(f'{prompt} [{settings[key]}]: ').strip()
+            if value:settings[key]=int(value) if key=='blur' else float(value)
+    elif args.action=='font':
+        print('Use an installed font family. The default pairs rounded Maple Mono NF with Victor Mono italics.')
+        result=subprocess.run(['/Applications/Ghostty.app/Contents/MacOS/ghostty','+list-fonts'],capture_output=True,text=True)
+        families=[line.strip() for line in result.stdout.splitlines() if line and not line[0].isspace()]
+        if result.returncode or not families: raise ValueError('Could not list installed fonts')
+        selected=choose(sorted(set(families)))
+        if not selected:return
+        settings['font']=selected
+        italic=input('Italic font family ['+settings['italic_font']+']: ').strip()
+        if italic:
+            if italic not in families: raise ValueError('Italic family must be installed')
+            settings['italic_font']=italic
+        value=input(f'Font size [{settings["size"]}]: ').strip()
+        if value:settings['size']=float(value)
+        value=input('Thicken font? [Y/n]: ').strip().lower();settings['thicken']=value!='n'
+    elif args.action=='reset':
+        if input('Restore default appearance? [y/N]: ').strip().lower()!='y':return
+        settings=DEFAULTS.copy()
+    print('Pending appearance settings:')
+    print(json.dumps(settings,indent=2))
+    if input('Apply these settings? [y/N]: ').strip().lower()!='y':return
+    write(settings)
+    print('Saved. Reload Ghostty with Cmd-Shift-comma; font changes may need a new window. Restart Neovim for coding-theme changes. Font ligatures and syntax italics remain enabled.')
+if __name__=='__main__':
+    try:main()
+    except (ValueError,OSError,EOFError) as error:print('Settings:',error);raise SystemExit(1)

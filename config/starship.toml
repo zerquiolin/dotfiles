@@ -1,0 +1,25 @@
+add_newline = false
+format = "$directory$git_branch$git_status$python$aws$cmd_duration$character"
+command_timeout = 150
+[directory]
+style = "bold #89ddff"
+truncation_length = 3
+[git_branch]
+style = "#a6accd"
+[git_status]
+disabled = true
+[python]
+format = "[($virtualenv )]($style)"
+style = "#5de4c7"
+[character]
+success_symbol = "[❯](#5de4c7)"
+error_symbol = "[❯](#d0679d)"
+
+[aws]
+format = '[☁ $profile ($region) ]($style)'
+style = 'bold #fffac2'
+force_display = true
+[cmd_duration]
+min_time = 2000
+format = '[ $duration ]($style)'
+style = '#767c9d'

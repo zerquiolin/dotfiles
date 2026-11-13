@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+"""Format stdin with shared latexindent rules and nearest project overrides."""
+import os,pathlib,subprocess,sys,tempfile
+root=pathlib.Path(__file__).resolve().parents[1]
+filename=pathlib.Path(sys.argv[1]).resolve() if len(sys.argv)>1 else pathlib.Path.cwd()/'stdin.tex'
+configs=[root/'config/latexindent/.latexindent.yaml']
+for folder in [filename.parent,*filename.parent.parents]:
+    found=next((folder/name for name in ('.latexindent.yaml','latexindent.yaml','.localSettings.yaml','localSettings.yaml') if (folder/name).is_file()),None)
+    if found:
+        configs.append(found);break
+    if (folder/'.git').exists():break
+# Temporary scratch storage avoids indent.log and backup artifacts in projects.
+with tempfile.TemporaryDirectory(prefix='latex-format-') as scratch:
+    args=['/opt/homebrew/bin/latexindent','-m','-c='+scratch]
+    args += ['-l='+','.join(map(str,configs)),'-']
+    result=subprocess.run(args,input=sys.stdin.buffer.read(),capture_output=True,cwd=filename.parent)
+    if result.returncode:
+        sys.stderr.buffer.write(result.stderr or result.stdout);sys.exit(result.returncode)
+    sys.stdout.buffer.write(result.stdout.rstrip(b'\r\n')+b'\n')
